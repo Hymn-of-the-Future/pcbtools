@@ -1,0 +1,1209 @@
+<!DOCTYPE html> 
+<html lang="zh"> 
+<head>  
+  <meta charset="UTF-8" />  
+  <title>智能PCB图像处理</title>  
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />  
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/browser-image-compression@2.0.2/dist/browser-image-compression.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+  <style>
+    .fade { transition: opacity 0.5s ease; }
+    .color-picker {
+      display: inline-block;
+      width: 24px;
+      height: 24px;
+      border: 2px solid #fff;
+      border-radius: 50%;
+      cursor: pointer;
+      box-shadow: 0 0 2px rgba(0,0,0,0.5);
+    }
+    .color-picker.selected {
+      border-color: #000;
+      transform: scale(1.1);
+    }
+    .slider-container {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .slider-value { min-width: 40px; text-align: center; }
+    .brush-size-selector { margin-top: 8px; }
+    .brush-size-label { font-size: 14px; margin-right: 8px; }
+    .brush-size-input { width: 60px; padding: 2px; }
+    .region-mode { background-color: #e2f0fd !important; }
+    .tool-button {
+      cursor: pointer;
+      border: 1px solid #ccc;
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-size: 12px;
+      margin-right: 4px;
+    }
+    .tool-button.active {
+      background-color: #2563eb;
+      color: white;
+      border-color: #2563eb;
+    }
+    .path-preview {
+      position: absolute;
+      top: 0;
+      left: 0;
+      pointer-events: none;
+    }
+    @media (max-width: 768px) {
+      .container { padding: 20px; }
+      .canvas-container { width: 100%; }
+    }
+  </style>
+</head> 
+<body class="bg-gray-100 text-gray-900 font-sans p-6">
+  <div class="max-w-6xl mx-auto space-y-6 container">
+    <h1 class="text-3xl font-bold text-center">智能PCB图像处理工作台</h1>
+
+    <!-- 上传区域 -->
+    <div id="drop-area" class="border-2 border-dashed border-blue-400 rounded-lg p-6 bg-white text-center cursor-pointer">
+      <p class="text-lg">点击或拖拽图片到此</p>
+      <input type="file" id="uploader" accept="image/*" class="hidden">
+      <div id="img-info" class="text-sm text-gray-600 mt-2"></div>
+    </div>
+
+    <!-- 原图编辑工具 -->
+    <div id="originalEditTool" class="hidden bg-white p-4 rounded shadow">
+      <h2 class="font-semibold mb-2">原图编辑工具</h2>
+      <div class="mb-4">
+        <p class="text-sm text-gray-600 mb-2">选择工具和颜色，然后在原图上操作</p>
+        <div class="flex mb-2">
+          <button id="originalBrushBtn" class="tool-button active">画笔工具</button>
+          <button id="originalLassoBtn" class="tool-button">套索工具</button>
+          <button id="originalFillBtn" class="tool-button">填充工具</button>
+        </div>
+        <div class="slider-container mb-2">
+          <span class="text-sm">颜色容差:</span>
+          <input type="range" id="toleranceSlider" min="0" max="100" value="30" class="flex-1">
+          <span id="toleranceValue" class="slider-value">30</span>
+        </div>
+        <div class="brush-size-selector">
+          <span class="brush-size-label">区域大小:</span>
+          <input type="number" id="brushSizeOriginal" min="1" max="100" value="1" class="brush-size-input">
+          <span>像素</span>
+        </div>
+        <div id="availableColorsOriginal" class="flex flex-wrap gap-2"></div>
+      </div>
+      <div class="flex gap-4">
+        <button id="clearOriginalSelectionBtn" class="bg-gray-200 hover:bg-gray-300 px-3 py-1 rounded text-sm hidden">清除选区</button>
+        <button id="undoOriginalBtn" class="bg-gray-200 hover:bg-gray-300 px-3 py-1 rounded text-sm" disabled>撤销</button>
+        <button id="resetOriginalBtn" class="bg-gray-200 hover:bg-gray-300 px-3 py-1 rounded text-sm">重置</button>
+        <button id="nextStepBtn" class="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded text-sm">下一步：选择色系</button>
+      </div>
+    </div>
+
+    <!-- 色系选择 -->
+    <div id="colorSelection" class="hidden space-y-2 bg-white p-4 rounded shadow">
+      <h2 class="font-semibold">选择主颜色系：</h2>
+      <div class="flex gap-4">
+        <label class="flex items-center space-x-2">
+          <input type="radio" name="mainColor" value="blue" class="accent-blue-600">
+          <span>蓝色系</span>
+        </label>
+        <label class="flex items-center space-x-2">
+          <input type="radio" name="mainColor" value="red" class="accent-red-600">
+          <span>红色系</span>
+        </label>
+        <label class="flex items-center space-x-2">
+          <input type="radio" name="mainColor" value="purple" class="accent-purple-600">
+          <span>紫色系</span>
+        </label>
+      </div>
+    </div>
+
+    <!-- 简化图编辑工具 -->
+    <div id="simplifiedEditTool" class="hidden bg-white p-4 rounded shadow">
+      <h2 class="font-semibold mb-2">简化图编辑工具</h2>
+      <div class="mb-4">
+        <p class="text-sm text-gray-600 mb-2">选择工具和颜色，然后在简化图上操作</p>
+        <div class="flex mb-2">
+          <button id="simplifiedBrushBtn" class="tool-button active">画笔工具</button>
+          <button id="simplifiedLassoBtn" class="tool-button">套索工具</button>
+          <button id="simplifiedFillBtn" class="tool-button">填充工具</button>
+        </div>
+        <div class="brush-size-selector">
+          <span class="brush-size-label">区域大小:</span>
+          <input type="number" id="brushSizeSimplified" min="1" max="100" value="1" class="brush-size-input">
+          <span>像素</span>
+        </div>
+        <div id="availableColorsSimplified" class="flex flex-wrap gap-2"></div>
+      </div>
+      <div class="flex gap-4">
+        <button id="clearSimplifiedSelectionBtn" class="bg-gray-200 hover:bg-gray-300 px-3 py-1 rounded text-sm hidden">清除选区</button>
+        <button id="undoSimplifiedBtn" class="bg-gray-200 hover:bg-gray-300 px-3 py-1 rounded text-sm" disabled>撤销</button>
+        <button id="resetSimplifiedBtn" class="bg-gray-200 hover:bg-gray-300 px-3 py-1 rounded text-sm">重置</button>
+        <button id="generateBtn" class="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded text-sm">一键生成</button>
+      </div>
+    </div>
+
+    <!-- 提示 -->
+    <div id="toast" class="fixed bottom-6 left-1/2 transform -translate-x-1/2 bg-black text-white px-4 py-2 rounded shadow opacity-0 fade text-sm z-50"></div>
+
+    <!-- 原图与简化图 -->
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+      <div class="bg-white rounded shadow p-4 canvas-container relative">
+        <h2 class="font-semibold mb-2">原图 <span class="text-sm font-normal">(点击图片可修改颜色)</span></h2>
+        <canvas id="originalCanvas" class="w-full border rounded cursor-crosshair"></canvas>
+        <canvas id="originalPathPreview" class="path-preview pointer-events-none"></canvas>
+      </div>
+      <div class="bg-white rounded shadow p-4 canvas-container relative">
+        <h2 class="font-semibold mb-2">简化图 <span class="text-sm font-normal">(点击图片可修改颜色)</span></h2>
+        <canvas id="simplifiedCanvas" class="w-full border rounded cursor-crosshair"></canvas>
+        <canvas id="simplifiedPathPreview" class="path-preview pointer-events-none"></canvas>
+      </div>
+    </div>
+
+    <!-- 遮罩图层 -->
+    <div id="maskContainer" class="hidden bg-white rounded shadow p-4">
+      <h2 class="text-lg font-semibold mb-4">遮罩图层</h2>
+      <div id="masks" class="flex flex-wrap gap-4"></div>
+    </div>
+
+    <!-- 合成图层 -->
+    <div id="layerContainer" class="hidden bg-white rounded shadow p-4">
+      <h2 class="text-lg font-semibold mb-4">合成图层</h2>
+      <div id="layers" class="flex flex-wrap gap-4"></div>
+    </div>
+
+    <!-- 实物预览图 -->
+    <div id="previewContainer" class="hidden bg-white rounded shadow p-4">
+      <h2 class="text-lg font-semibold mb-4">实物预览图</h2>
+      <div id="preview" class="flex flex-wrap gap-4">
+        <canvas id="previewCanvas" class="w-full border rounded max-w-md"></canvas>
+      </div>
+    </div>
+
+    <!-- 返回修改按钮 -->
+    <div id="backToEditContainer" class="hidden bg-white p-4 rounded shadow text-center">
+      <button id="backToOriginalBtn" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded mr-4">返回修改原图</button>
+      <button id="backToSimplifiedBtn" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded">返回修改简化图</button>
+    </div>
+
+    <!-- 自定义文件名输入框 -->
+    <div class="bg-white p-4 rounded shadow">
+      <h2 class="font-semibold">自定义下载文件名：</h2>
+      <input type="text" id="customFilename" class="w-full p-2 border rounded" placeholder="请输入自定义文件名">
+    </div>
+
+    <!-- 保留底部下载按钮 -->
+    <div class="text-center mt-4">
+      <button id="downloadAllBtn" class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded">一键下载所有图片</button>
+    </div>
+  </div>
+
+  <script>
+    // 常量定义
+    const COLOR_SCHEMES = {
+      blue: {
+        '深蓝': [22, 31, 125],
+        '浅蓝': [93, 167, 227],
+        '深绿': [25, 53, 34],
+        '浅绿': [249, 225, 149],
+        '黑色': [6, 16, 8],
+        '白色': [230, 234, 235]
+      },
+      red: {
+        '深红': [125, 22, 22],
+        '浅红': [227, 93, 93],
+        '深绿': [25, 53, 34],
+        '浅绿': [249, 225, 149],
+        '黑色': [6, 16, 8],
+        '白色': [230, 234, 235]
+      },
+      purple: {
+        '深紫': [125, 22, 125],
+        '浅紫': [227, 93, 227],
+        '深绿': [25, 53, 34],
+        '浅绿': [249, 225, 149],
+        '黑色': [6, 16, 8],
+        '白色': [230, 234, 235]
+      }
+    };
+
+    const REPLACE_COLORS = {
+      '深蓝': [22, 31, 125],
+      '浅蓝': [93, 167, 227],
+      '深绿': [25, 53, 34],
+      '浅绿': [249, 225, 149],
+      '黑色': [6, 16, 8],
+      '白色': [230, 234, 235],
+      '深紫': [125, 22, 125],
+      '浅紫': [227, 93, 227],
+      '深红': [125, 22, 22],
+      '浅红': [227, 93, 93]
+    };
+
+    const RENAME_MAP = {
+      '正面铜皮层': '放在顶层',
+      '白色': '放在顶层丝印层',
+      '正面阻焊层': '放在顶层阻焊层',
+      '深蓝': '放在底层注意镜像',
+      '深红': '放在底层注意镜像',
+      '深紫': '放在底层注意镜像',
+      '背面阻焊层': '放在底层阻焊层注意镜像'
+    };
+
+    // PCB图像处理类
+    class PCBImageProcessor {
+      constructor() {
+        this.image = null;
+        this.currentColorScheme = {};
+        this.simplifiedImageData = null;
+        this.originalEditHistory = [];
+        this.simplifiedEditHistory = [];
+        this.maskList = [];
+        this.selectedOriginalColor = null;
+        this.selectedSimplifiedColor = null;
+        this.currentTolerance = 30;
+        this.brushSizeOriginal = 1;
+        this.brushSizeSimplified = 1;
+        this.isDrawingLassoOriginal = false;
+        this.isDrawingLassoSimplified = false;
+        this.lassoPointsOriginal = [];
+        this.lassoPointsSimplified = [];
+        this.originalCanvasOffset = { x: 0, y: 0 };
+        this.simplifiedCanvasOffset = { x: 0, y: 0 };
+        this.originalTool = 'brush'; // 'brush', 'lasso', 'fill'
+        this.simplifiedTool = 'brush'; // 'brush', 'lasso', 'fill'
+
+        this.initElements();
+        this.setupEventListeners();
+      }
+
+      initElements() {
+        this.uploader = document.getElementById('uploader');
+        this.dropArea = document.getElementById('drop-area');
+        this.originalCanvas = document.getElementById('originalCanvas');
+        this.simplifiedCanvas = document.getElementById('simplifiedCanvas');
+        this.originalPathPreview = document.getElementById('originalPathPreview');
+        this.simplifiedPathPreview = document.getElementById('simplifiedPathPreview');
+        this.masksContainer = document.getElementById('masks');
+        this.layersContainer = document.getElementById('layers');
+        this.toast = document.getElementById('toast');
+        this.imgInfo = document.getElementById('img-info');
+        this.originalEditTool = document.getElementById('originalEditTool');
+        this.simplifiedEditTool = document.getElementById('simplifiedEditTool');
+        this.availableColorsOriginal = document.getElementById('availableColorsOriginal');
+        this.availableColorsSimplified = document.getElementById('availableColorsSimplified');
+        this.undoOriginalBtn = document.getElementById('undoOriginalBtn');
+        this.resetOriginalBtn = document.getElementById('resetOriginalBtn');
+        this.nextStepBtn = document.getElementById('nextStepBtn');
+        this.undoSimplifiedBtn = document.getElementById('undoSimplifiedBtn');
+        this.resetSimplifiedBtn = document.getElementById('resetSimplifiedBtn');
+        this.generateBtn = document.getElementById('generateBtn');
+        this.maskContainer = document.getElementById('maskContainer');
+        this.layerContainer = document.getElementById('layerContainer');
+        this.previewContainer = document.getElementById('previewContainer');
+        this.toleranceSlider = document.getElementById('toleranceSlider');
+        this.toleranceValue = document.getElementById('toleranceValue');
+        this.brushSizeOriginalInput = document.getElementById('brushSizeOriginal');
+        this.brushSizeSimplifiedInput = document.getElementById('brushSizeSimplified');
+        this.downloadAllBtn = document.getElementById('downloadAllBtn');
+        this.backToEditContainer = document.getElementById('backToEditContainer');
+        this.backToOriginalBtn = document.getElementById('backToOriginalBtn');
+        this.backToSimplifiedBtn = document.getElementById('backToSimplifiedBtn');
+        this.originalBrushBtn = document.getElementById('originalBrushBtn');
+        this.originalLassoBtn = document.getElementById('originalLassoBtn');
+        this.originalFillBtn = document.getElementById('originalFillBtn');
+        this.simplifiedBrushBtn = document.getElementById('simplifiedBrushBtn');
+        this.simplifiedLassoBtn = document.getElementById('simplifiedLassoBtn');
+        this.simplifiedFillBtn = document.getElementById('simplifiedFillBtn');
+        this.clearOriginalSelectionBtn = document.getElementById('clearOriginalSelectionBtn');
+        this.clearSimplifiedSelectionBtn = document.getElementById('clearSimplifiedSelectionBtn');
+      }
+
+      setupEventListeners() {
+        this.dropArea.addEventListener('click', () => this.uploader.click());
+        this.dropArea.addEventListener('dragover', e => { e.preventDefault(); this.dropArea.classList.add('bg-blue-100'); });
+        this.dropArea.addEventListener('dragleave', () => this.dropArea.classList.remove('bg-blue-100'));
+        this.dropArea.addEventListener('drop', e => {
+          e.preventDefault();
+          this.dropArea.classList.remove('bg-blue-100');
+          this.handleImageUpload(e.dataTransfer.files[0]);
+        });
+        this.uploader.addEventListener('change', e => this.handleImageUpload(e.target.files[0]));
+
+        this.toleranceSlider.addEventListener('input', () => {
+          this.currentTolerance = parseInt(this.toleranceSlider.value);
+          this.toleranceValue.textContent = this.currentTolerance;
+        });
+
+        this.brushSizeOriginalInput.addEventListener('change', () => {
+          this.brushSizeOriginal = parseInt(this.brushSizeOriginalInput.value) || 1;
+        });
+
+        this.brushSizeSimplifiedInput.addEventListener('change', () => {
+          this.brushSizeSimplified = parseInt(this.brushSizeSimplifiedInput.value) || 1;
+        });
+
+        this.undoOriginalBtn.addEventListener('click', () => this.undoOriginal());
+        this.resetOriginalBtn.addEventListener('click', () => this.resetOriginal());
+        this.nextStepBtn.addEventListener('click', () => this.nextStep());
+        this.undoSimplifiedBtn.addEventListener('click', () => this.undoSimplified());
+        this.resetSimplifiedBtn.addEventListener('click', () => this.resetSimplified());
+        this.generateBtn.addEventListener('click', () => this.generate());
+        this.downloadAllBtn.addEventListener('click', () => this.downloadAllAsZip());
+        this.backToOriginalBtn.addEventListener('click', () => this.backToOriginal());
+        this.backToSimplifiedBtn.addEventListener('click', () => this.backToSimplified());
+        this.clearOriginalSelectionBtn.addEventListener('click', () => this.clearOriginalSelection());
+        this.clearSimplifiedSelectionBtn.addEventListener('click', () => this.clearSimplifiedSelection());
+
+        // 工具按钮事件
+        this.originalBrushBtn.addEventListener('click', () => this.setOriginalTool('brush'));
+        this.originalLassoBtn.addEventListener('click', () => this.setOriginalTool('lasso'));
+        this.originalFillBtn.addEventListener('click', () => this.setOriginalTool('fill'));
+        this.simplifiedBrushBtn.addEventListener('click', () => this.setSimplifiedTool('brush'));
+        this.simplifiedLassoBtn.addEventListener('click', () => this.setSimplifiedTool('lasso'));
+        this.simplifiedFillBtn.addEventListener('click', () => this.setSimplifiedTool('fill'));
+
+        document.querySelectorAll('input[name="mainColor"]').forEach(input => {
+          input.addEventListener('change', () => {
+            this.currentColorScheme = COLOR_SCHEMES[input.value];
+            this.initialProcessPCB();
+          });
+        });
+      }
+
+      setOriginalTool(tool) {
+        this.originalTool = tool;
+        this.originalBrushBtn.classList.remove('active');
+        this.originalLassoBtn.classList.remove('active');
+        this.originalFillBtn.classList.remove('active');
+        
+        document.getElementById(`original${tool.charAt(0).toUpperCase() + tool.slice(1)}Btn`).classList.add('active');
+        
+        if (tool === 'brush') {
+          this.originalCanvas.style.cursor = 'crosshair';
+          this.clearOriginalSelectionBtn.classList.add('hidden');
+        } else if (tool === 'lasso') {
+          this.originalCanvas.style.cursor = 'crosshair';
+          this.clearOriginalSelectionBtn.classList.remove('hidden');
+        } else if (tool === 'fill') {
+          this.originalCanvas.style.cursor = 'cell';
+          this.clearOriginalSelectionBtn.classList.add('hidden');
+        }
+      }
+
+      setSimplifiedTool(tool) {
+        this.simplifiedTool = tool;
+        this.simplifiedBrushBtn.classList.remove('active');
+        this.simplifiedLassoBtn.classList.remove('active');
+        this.simplifiedFillBtn.classList.remove('active');
+        
+        document.getElementById(`simplified${tool.charAt(0).toUpperCase() + tool.slice(1)}Btn`).classList.add('active');
+        
+        if (tool === 'brush') {
+          this.simplifiedCanvas.style.cursor = 'crosshair';
+          this.clearSimplifiedSelectionBtn.classList.add('hidden');
+        } else if (tool === 'lasso') {
+          this.simplifiedCanvas.style.cursor = 'crosshair';
+          this.clearSimplifiedSelectionBtn.classList.remove('hidden');
+        } else if (tool === 'fill') {
+          this.simplifiedCanvas.style.cursor = 'cell';
+          this.clearSimplifiedSelectionBtn.classList.add('hidden');
+        }
+      }
+
+      clearOriginalSelection() {
+        this.lassoPointsOriginal = [];
+        const ctx = this.originalPathPreview.getContext('2d');
+        ctx.clearRect(0, 0, this.originalPathPreview.width, this.originalPathPreview.height);
+      }
+
+      clearSimplifiedSelection() {
+        this.lassoPointsSimplified = [];
+        const ctx = this.simplifiedPathPreview.getContext('2d');
+        ctx.clearRect(0, 0, this.simplifiedPathPreview.width, this.simplifiedPathPreview.height);
+      }
+
+      showToast(msg) {
+        this.toast.innerText = msg;
+        this.toast.style.opacity = 1;
+        setTimeout(() => { this.toast.style.opacity = 0; }, 2000);
+      }
+
+      async handleImageUpload(file) {
+        this.showToast('正在压缩图片...');
+        if (!file.type.startsWith('image/')) {
+          this.showToast('请上传有效的图像文件');
+          return;
+        }
+
+        try {
+          const compressed = await imageCompression(file, {
+            maxSizeMB: 2,
+            maxWidthOrHeight: 1500,
+            useWebWorker: true
+          });
+                  
+          const reader = new FileReader();
+          reader.onload = e => {
+            this.image = new Image();
+            this.image.onload = () => {
+              this.originalCanvas.width = this.simplifiedCanvas.width = this.image.width;
+              this.originalCanvas.height = this.simplifiedCanvas.height = this.image.height;
+              
+              // 初始化路径预览画布
+              this.originalPathPreview.width = this.simplifiedPathPreview.width = this.image.width;
+              this.originalPathPreview.height = this.simplifiedPathPreview.height = this.image.height;
+              
+              // 计算画布偏移量
+              const originalRect = this.originalCanvas.getBoundingClientRect();
+              this.originalCanvasOffset = { x: originalRect.left, y: originalRect.top };
+              
+              const simplifiedRect = this.simplifiedCanvas.getBoundingClientRect();
+              this.simplifiedCanvasOffset = { x: simplifiedRect.left, y: simplifiedRect.top };
+              
+              const ctx = this.originalCanvas.getContext("2d");
+              ctx.drawImage(this.image, 0, 0);
+              this.imgInfo.innerText = `尺寸：${this.image.width}x${this.image.height}，文件大小：${(compressed.size / 1024 / 1024).toFixed(2)} MB`;
+                            
+              this.originalEditTool.classList.remove('hidden');
+              this.setupOriginalColorPicker();
+              this.setupOriginalCanvasHandlers();
+                            
+              this.originalEditHistory = [];
+              this.simplifiedEditHistory = [];
+              this.maskList = [];
+              this.maskContainer.classList.add('hidden');
+              this.layerContainer.classList.add('hidden');
+              this.previewContainer.classList.add('hidden');
+              this.backToEditContainer.classList.add('hidden');
+              document.getElementById("colorSelection").classList.add('hidden');
+              this.simplifiedEditTool.classList.add('hidden');
+              
+              // 默认工具设置
+              this.setOriginalTool('brush');
+              this.setSimplifiedTool('brush');
+            };
+            this.image.src = e.target.result;
+          };
+          reader.readAsDataURL(compressed);
+        } catch (error) {
+          this.showToast('图片处理出错: ' + error.message);
+        }
+      }
+
+      setupOriginalColorPicker() {
+        this.availableColorsOriginal.innerHTML = '';
+        for (const [name, color] of Object.entries(REPLACE_COLORS)) {
+          const colorDiv = document.createElement('div');
+          colorDiv.className = 'color-picker';
+          colorDiv.style.backgroundColor = `rgb(${color.join(',')})`;
+          colorDiv.title = name;
+          colorDiv.dataset.color = name;
+                  
+          colorDiv.addEventListener('click', () => {
+            document.querySelectorAll('#availableColorsOriginal .color-picker').forEach(el => el.classList.remove('selected'));
+            colorDiv.classList.add('selected');
+            this.selectedOriginalColor = color;
+          });
+                  
+          this.availableColorsOriginal.appendChild(colorDiv);
+        }
+      }
+
+      setupOriginalCanvasHandlers() {
+        this.originalCanvas.addEventListener('mousedown', (e) => {
+          if (!this.selectedOriginalColor) {
+            this.showToast('请先选择要替换成的颜色');
+            return;
+          }
+          
+          const canvas = this.originalCanvas;
+          const rect = canvas.getBoundingClientRect();
+          const x = Math.floor((e.clientX - rect.left) * (canvas.width / rect.width));
+          const y = Math.floor((e.clientY - rect.top) * (canvas.height / rect.height));
+          
+          if (this.originalTool === 'lasso') {
+            this.isDrawingLassoOriginal = true;
+            this.lassoPointsOriginal = [[x, y]];
+            
+            // 初始化路径预览
+            const ctx = this.originalPathPreview.getContext('2d');
+            ctx.clearRect(0, 0, this.originalPathPreview.width, this.originalPathPreview.height);
+            ctx.strokeStyle = 'rgba(0, 0, 255, 0.5)';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(x, y);
+            ctx.lineTo(x, y);
+            ctx.stroke();
+          } else if (this.originalTool === 'brush') {
+            this.saveOriginalCanvasState();
+            this.modifyOriginalPixelArea(x, y);
+          } else if (this.originalTool === 'fill') {
+            this.saveOriginalCanvasState();
+            this.fillOriginalArea(x, y);
+          }
+        });
+        
+        this.originalCanvas.addEventListener('mousemove', (e) => {
+          if (!this.isDrawingLassoOriginal) return;
+          
+          const canvas = this.originalCanvas;
+          const rect = canvas.getBoundingClientRect();
+          const x = Math.floor((e.clientX - rect.left) * (canvas.width / rect.width));
+          const y = Math.floor((e.clientY - rect.top) * (canvas.height / rect.height));
+          
+          this.lassoPointsOriginal.push([x, y]);
+          
+          // 更新路径预览
+          const ctx = this.originalPathPreview.getContext('2d');
+          ctx.strokeStyle = 'rgba(0, 0, 255, 0.5)';
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.moveTo(this.lassoPointsOriginal[0][0], this.lassoPointsOriginal[0][1]);
+          
+          for (let i = 1; i < this.lassoPointsOriginal.length; i++) {
+            ctx.lineTo(this.lassoPointsOriginal[i][0], this.lassoPointsOriginal[i][1]);
+          }
+          
+          ctx.stroke();
+        });
+        
+        this.originalCanvas.addEventListener('mouseup', (e) => {
+          if (!this.isDrawingLassoOriginal) return;
+          
+          this.isDrawingLassoOriginal = false;
+          
+          // 闭合选区
+          if (this.lassoPointsOriginal.length > 2) {
+            this.saveOriginalCanvasState();
+            this.modifyOriginalLassoArea();
+          }
+        });
+      }
+
+      modifyOriginalPixelArea(x, y) {
+        const ctx = this.originalCanvas.getContext('2d');
+        const pixelData = ctx.getImageData(x, y, 1, 1).data;
+        const targetColor = [pixelData[0], pixelData[1], pixelData[2]];
+        const imageData = ctx.getImageData(0, 0, this.originalCanvas.width, this.originalCanvas.height);
+
+        const radius = Math.floor(this.brushSizeOriginal / 2);
+        const startX = Math.max(0, x - radius);
+        const startY = Math.max(0, y - radius);
+        const endX = Math.min(this.originalCanvas.width, x + radius + 1);
+        const endY = Math.min(this.originalCanvas.height, y + radius + 1);
+
+        for (let py = startY; py < endY; py++) {
+          for (let px = startX; px < endX; px++) {
+            const i = (py * this.originalCanvas.width + px) * 4;
+            const r = imageData.data[i];
+            const g = imageData.data[i+1];
+            const b = imageData.data[i+2];
+                        
+            const distance = Math.sqrt(
+              Math.pow(r - targetColor[0], 2) +
+              Math.pow(g - targetColor[1], 2) +
+              Math.pow(b - targetColor[2], 2)
+            );
+
+            if (distance <= this.currentTolerance) {
+              imageData.data[i] = this.selectedOriginalColor[0];
+              imageData.data[i+1] = this.selectedOriginalColor[1];
+              imageData.data[i+2] = this.selectedOriginalColor[2];
+            }
+          }
+        }
+
+        ctx.putImageData(imageData, 0, 0);
+        this.showToast(`已替换${this.brushSizeOriginal}x${this.brushSizeOriginal}区域内相似颜色 (容差: ${this.currentTolerance})`);
+      }
+
+      modifyOriginalLassoArea() {
+        if (this.lassoPointsOriginal.length < 3) return;
+        
+        const ctx = this.originalCanvas.getContext('2d');
+        const imageData = ctx.getImageData(0, 0, this.originalCanvas.width, this.originalCanvas.height);
+        
+        // 创建一个用于点选检测的路径
+        const path = new Path2D();
+        path.moveTo(this.lassoPointsOriginal[0][0], this.lassoPointsOriginal[0][1]);
+        for (let i = 1; i < this.lassoPointsOriginal.length; i++) {
+          path.lineTo(this.lassoPointsOriginal[i][0], this.lassoPointsOriginal[i][1]);
+        }
+        path.closePath();
+        
+        // 创建一个中间画布用于检测选区内的像素
+        const tempCanvas = document.createElement('canvas');
+        tempCanvas.width = this.originalCanvas.width;
+        tempCanvas.height = this.originalCanvas.height;
+        const tempCtx = tempCanvas.getContext('2d');
+        tempCtx.drawImage(this.originalCanvas, 0, 0);
+        
+        // 获取选区内的像素
+        for (let y = 0; y < this.originalCanvas.height; y++) {
+          for (let x = 0; x < this.originalCanvas.width; x++) {
+            if (tempCtx.isPointInPath(path, x, y)) {
+              const i = (y * this.originalCanvas.width + x) * 4;
+              const r = imageData.data[i];
+              const g = imageData.data[i+1];
+              const b = imageData.data[i+2];
+              
+              imageData.data[i] = this.selectedOriginalColor[0];
+              imageData.data[i+1] = this.selectedOriginalColor[1];
+              imageData.data[i+2] = this.selectedOriginalColor[2];
+            }
+          }
+        }
+        
+        ctx.putImageData(imageData, 0, 0);
+        
+        // 清除路径预览
+        const previewCtx = this.originalPathPreview.getContext('2d');
+        previewCtx.clearRect(0, 0, this.originalPathPreview.width, this.originalPathPreview.height);
+        
+        this.lassoPointsOriginal = [];
+        this.showToast('已替换选区内的颜色');
+      }
+
+      fillOriginalArea(x, y) {
+        const ctx = this.originalCanvas.getContext('2d');
+        const pixelData = ctx.getImageData(x, y, 1, 1).data;
+        const targetColor = [pixelData[0], pixelData[1], pixelData[2]];
+        
+        if (this.selectedOriginalColor[0] === targetColor[0] && 
+            this.selectedOriginalColor[1] === targetColor[1] && 
+            this.selectedOriginalColor[2] === targetColor[2]) {
+          this.showToast('填充颜色与目标颜色相同');
+          return;
+        }
+
+        const imageData = ctx.getImageData(0, 0, this.originalCanvas.width, this.originalCanvas.height);
+        const visited = new Set();
+        const queue = [[x, y]];
+        
+        visited.add(`${x},${y}`);
+
+        while (queue.length > 0) {
+          const [cx, cy] = queue.shift();
+          const i = (cy * this.originalCanvas.width + cx) * 4;
+          
+          const r = imageData.data[i];
+          const g = imageData.data[i+1];
+          const b = imageData.data[i+2];
+          
+          const distance = Math.sqrt(
+            Math.pow(r - targetColor[0], 2) +
+            Math.pow(g - targetColor[1], 2) +
+            Math.pow(b - targetColor[2], 2)
+          );
+
+          if (distance <= this.currentTolerance) {
+            // 替换颜色
+            imageData.data[i] = this.selectedOriginalColor[0];
+            imageData.data[i+1] = this.selectedOriginalColor[1];
+            imageData.data[i+2] = this.selectedOriginalColor[2];
+            
+            // 检查周围的像素
+            const neighbors = [
+              [cx - 1, cy], [cx + 1, cy],
+              [cx, cy - 1], [cx, cy + 1]
+            ];
+            
+            for (const [nx, ny] of neighbors) {
+              if (nx >= 0 && nx < this.originalCanvas.width && 
+                  ny >= 0 && ny < this.originalCanvas.height) {
+                const key = `${nx},${ny}`;
+                if (!visited.has(key)) {
+                  visited.add(key);
+                  queue.push([nx, ny]);
+                }
+              }
+            }
+          }
+        }
+        
+        ctx.putImageData(imageData, 0, 0);
+        this.showToast('已完成填充操作');
+      }
+
+      saveOriginalCanvasState() {
+        const ctx = this.originalCanvas.getContext('2d');
+        const w = this.originalCanvas.width, h = this.originalCanvas.height;
+        const imageData = ctx.getImageData(0, 0, w, h);
+        this.originalEditHistory.push(new ImageData(new Uint8ClampedArray(imageData.data), w, h));
+        this.undoOriginalBtn.disabled = false;
+      }
+
+      undoOriginal() {
+        if (this.originalEditHistory.length > 0) {
+          const prevState = this.originalEditHistory.pop();
+          const ctx = this.originalCanvas.getContext('2d');
+          ctx.putImageData(prevState, 0, 0);
+          this.undoOriginalBtn.disabled = this.originalEditHistory.length === 0;
+        }
+      }
+
+      resetOriginal() {
+        if (confirm('确定要重置所有修改吗？')) {
+          const ctx = this.originalCanvas.getContext('2d');
+          ctx.drawImage(this.image, 0, 0);
+          this.originalEditHistory = [];
+          this.undoOriginalBtn.disabled = true;
+        }
+      }
+
+      nextStep() {
+        document.getElementById("colorSelection").classList.remove('hidden');
+        this.originalEditTool.classList.add('hidden');
+      }
+
+      initialProcessPCB() {
+        this.showToast('正在生成简化图像...');
+                
+        const w = this.originalCanvas.width, h = this.originalCanvas.height;
+        const ctx = this.originalCanvas.getContext('2d');
+        const data = ctx.getImageData(0, 0, w, h);
+        const simplified = this.simplifiedCanvas.getContext('2d');
+        this.simplifiedImageData = simplified.createImageData(w, h);
+                
+        for (let i = 0; i < data.data.length; i += 4) {
+          const pixel = [data.data[i], data.data[i+1], data.data[i+2]];
+          let closest = '白色', minDist = Infinity;
+          for (const [name, color] of Object.entries(this.currentColorScheme)) {
+            const d = Math.hypot(...color.map((c, idx) => c - pixel[idx]));
+            if (d < minDist) {
+              minDist = d;
+              closest = name;
+            }
+          }
+          const mappedColor = this.currentColorScheme[closest];
+          this.simplifiedImageData.data.set([...mappedColor, 255], i);
+        }
+                
+        simplified.putImageData(this.simplifiedImageData, 0, 0);
+                
+        this.setupSimplifiedColorPicker();
+        this.simplifiedEditTool.classList.remove('hidden');
+        this.setupSimplifiedCanvasHandlers();
+        this.showToast('简化图像已生成，现在可以修改颜色');
+      }
+
+      setupSimplifiedColorPicker() {
+        this.availableColorsSimplified.innerHTML = '';
+        for (const [name, color] of Object.entries(this.currentColorScheme)) {
+          const colorDiv = document.createElement('div');
+          colorDiv.className = 'color-picker';
+          colorDiv.style.backgroundColor = `rgb(${color.join(',')})`;
+          colorDiv.title = name;
+          colorDiv.dataset.color = name;
+                  
+          colorDiv.addEventListener('click', () => {
+            document.querySelectorAll('#availableColorsSimplified .color-picker').forEach(el => el.classList.remove('selected'));
+            colorDiv.classList.add('selected');
+            this.selectedSimplifiedColor = name;
+          });
+                  
+          this.availableColorsSimplified.appendChild(colorDiv);
+        }
+      }
+
+      setupSimplifiedCanvasHandlers() {
+        this.simplifiedCanvas.addEventListener('mousedown', (e) => {
+          if (!this.selectedSimplifiedColor) {
+            this.showToast('请先选择要替换成的颜色');
+            return;
+          }
+          
+          const canvas = this.simplifiedCanvas;
+          const rect = canvas.getBoundingClientRect();
+          const x = Math.floor((e.clientX - rect.left) * (canvas.width / rect.width));
+          const y = Math.floor((e.clientY - rect.top) * (canvas.height / rect.height));
+          
+          if (this.simplifiedTool === 'lasso') {
+            this.isDrawingLassoSimplified = true;
+            this.lassoPointsSimplified = [[x, y]];
+            
+            // 初始化路径预览
+            const ctx = this.simplifiedPathPreview.getContext('2d');
+            ctx.clearRect(0, 0, this.simplifiedPathPreview.width, this.simplifiedPathPreview.height);
+            ctx.strokeStyle = 'rgba(0, 0, 255, 0.5)';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(x, y);
+            ctx.lineTo(x, y);
+            ctx.stroke();
+          } else if (this.simplifiedTool === 'brush') {
+            this.saveSimplifiedCanvasState();
+            this.modifySimplifiedPixelArea(x, y);
+          } else if (this.simplifiedTool === 'fill') {
+            this.saveSimplifiedCanvasState();
+            this.fillSimplifiedArea(x, y);
+          }
+        });
+        
+        this.simplifiedCanvas.addEventListener('mousemove', (e) => {
+          if (!this.isDrawingLassoSimplified) return;
+          
+          const canvas = this.simplifiedCanvas;
+          const rect = canvas.getBoundingClientRect();
+          const x = Math.floor((e.clientX - rect.left) * (canvas.width / rect.width));
+          const y = Math.floor((e.clientY - rect.top) * (canvas.height / rect.height));
+          
+          this.lassoPointsSimplified.push([x, y]);
+          
+          // 更新路径预览
+          const ctx = this.simplifiedPathPreview.getContext('2d');
+          ctx.strokeStyle = 'rgba(0, 0, 255, 0.5)';
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.moveTo(this.lassoPointsSimplified[0][0], this.lassoPointsSimplified[0][1]);
+          
+          for (let i = 1; i < this.lassoPointsSimplified.length; i++) {
+            ctx.lineTo(this.lassoPointsSimplified[i][0], this.lassoPointsSimplified[i][1]);
+          }
+          
+          ctx.stroke();
+        });
+        
+        this.simplifiedCanvas.addEventListener('mouseup', (e) => {
+          if (!this.isDrawingLassoSimplified) return;
+          
+          this.isDrawingLassoSimplified = false;
+          
+          // 闭合选区
+          if (this.lassoPointsSimplified.length > 2) {
+            this.saveSimplifiedCanvasState();
+            this.modifySimplifiedLassoArea();
+          }
+        });
+      }
+
+      modifySimplifiedPixelArea(x, y) {
+        const ctx = this.simplifiedCanvas.getContext('2d');
+        const pixel = ctx.getImageData(x, y, 1, 1).data;
+        const newColor = this.currentColorScheme[this.selectedSimplifiedColor];
+
+        const radius = Math.floor(this.brushSizeSimplified / 2);
+        const startX = Math.max(0, x - radius);
+        const startY = Math.max(0, y - radius);
+        const endX = Math.min(this.simplifiedCanvas.width, x + radius + 1);
+        const endY = Math.min(this.simplifiedCanvas.height, y + radius + 1);
+
+        for (let py = startY; py < endY; py++) {
+          for (let px = startX; px < endX; px++) {
+            const i = (py * this.simplifiedCanvas.width + px) * 4;
+            if (this.simplifiedImageData.data[i] === pixel[0] && 
+                this.simplifiedImageData.data[i+1] === pixel[1] && 
+                this.simplifiedImageData.data[i+2] === pixel[2]) {
+              this.simplifiedImageData.data.set([...newColor, 255], i);
+            }
+          }
+        }
+
+        ctx.putImageData(this.simplifiedImageData, 0, 0);
+        this.showToast(`已将${this.brushSizeSimplified}x${this.brushSizeSimplified}区域内的像素替换为${this.selectedSimplifiedColor}`);
+      }
+
+      modifySimplifiedLassoArea() {
+        if (this.lassoPointsSimplified.length < 3) return;
+        
+        const ctx = this.simplifiedCanvas.getContext('2d');
+        
+        // 创建一个路径用于点选检测
+        const path = new Path2D();
+        path.moveTo(this.lassoPointsSimplified[0][0], this.lassoPointsSimplified[0][1]);
+        for (let i = 1; i < this.lassoPointsSimplified.length; i++) {
+          path.lineTo(this.lassoPointsSimplified[i][0], this.lassoPointsSimplified[i][1]);
+        }
+        path.closePath();
+        
+        // 创建一个中间画布用于检测选区内的像素
+        const tempCanvas = document.createElement('canvas');
+        tempCanvas.width = this.simplifiedCanvas.width;
+        tempCanvas.height = this.simplifiedCanvas.height;
+        const tempCtx = tempCanvas.getContext('2d');
+        tempCtx.putImageData(this.simplifiedImageData, 0, 0);
+        
+        const newColor = this.currentColorScheme[this.selectedSimplifiedColor];
+        
+        // 获取选区内的像素
+        for (let y = 0; y < this.simplifiedCanvas.height; y++) {
+          for (let x = 0; x < this.simplifiedCanvas.width; x++) {
+            if (tempCtx.isPointInPath(path, x, y)) {
+              const i = (y * this.simplifiedCanvas.width + x) * 4;
+              this.simplifiedImageData.data.set([...newColor, 255], i);
+            }
+          }
+        }
+        
+        ctx.putImageData(this.simplifiedImageData, 0, 0);
+        
+        // 清除路径预览
+        const previewCtx = this.simplifiedPathPreview.getContext('2d');
+        previewCtx.clearRect(0, 0, this.simplifiedPathPreview.width, this.simplifiedPathPreview.height);
+        
+        this.lassoPointsSimplified = [];
+        this.showToast('已替换选区内的颜色');
+      }
+
+      fillSimplifiedArea(x, y) {
+        const ctx = this.simplifiedCanvas.getContext('2d');
+        const pixel = ctx.getImageData(x, y, 1, 1).data;
+        const newColor = this.currentColorScheme[this.selectedSimplifiedColor];
+        
+        if (pixel[0] === newColor[0] && pixel[1] === newColor[1] && pixel[2] === newColor[2]) {
+          this.showToast('填充颜色与目标颜色相同');
+          return;
+        }
+
+        const visited = new Set();
+        const queue = [[x, y]];
+        
+        visited.add(`${x},${y}`);
+
+        while (queue.length > 0) {
+          const [cx, cy] = queue.shift();
+          const i = (cy * this.simplifiedCanvas.width + cx) * 4;
+          
+          if (this.simplifiedImageData.data[i] === pixel[0] && 
+              this.simplifiedImageData.data[i+1] === pixel[1] && 
+              this.simplifiedImageData.data[i+2] === pixel[2]) {
+            // 替换颜色
+            this.simplifiedImageData.data.set([...newColor, 255], i);
+            
+            // 检查周围的像素
+            const neighbors = [
+              [cx - 1, cy], [cx + 1, cy],
+              [cx, cy - 1], [cx, cy + 1]
+            ];
+            
+            for (const [nx, ny] of neighbors) {
+              if (nx >= 0 && nx < this.simplifiedCanvas.width && 
+                  ny >= 0 && ny < this.simplifiedCanvas.height) {
+                const key = `${nx},${ny}`;
+                if (!visited.has(key)) {
+                  visited.add(key);
+                  queue.push([nx, ny]);
+                }
+              }
+            }
+          }
+        }
+        
+        ctx.putImageData(this.simplifiedImageData, 0, 0);
+        this.showToast('已完成填充操作');
+      }
+
+      saveSimplifiedCanvasState() {
+        const ctx = this.simplifiedCanvas.getContext('2d');
+        const w = this.simplifiedCanvas.width, h = this.simplifiedCanvas.height;
+        const imageData = ctx.getImageData(0, 0, w, h);
+        this.simplifiedEditHistory.push(new ImageData(new Uint8ClampedArray(imageData.data), w, h));
+        this.undoSimplifiedBtn.disabled = false;
+      }
+
+      undoSimplified() {
+        if (this.simplifiedEditHistory.length > 0) {
+          const prevState = this.simplifiedEditHistory.pop();
+          const ctx = this.simplifiedCanvas.getContext('2d');
+          this.simplifiedImageData = prevState;
+          ctx.putImageData(prevState, 0, 0);
+          this.undoSimplifiedBtn.disabled = this.simplifiedEditHistory.length === 0;
+        }
+      }
+
+      resetSimplified() {
+        if (confirm('确定要重置所有修改吗？')) {
+          this.initialProcessPCB();
+        }
+      }
+
+      generate() {
+        this.showToast('正在生成遮罩和图层...');
+        this.simplifiedEditTool.classList.add('hidden');
+        this.maskContainer.classList.remove('hidden');
+        this.layerContainer.classList.remove('hidden');
+        this.previewContainer.classList.remove('hidden');
+        this.backToEditContainer.classList.remove('hidden');
+        this.processPCB();
+      }
+
+      backToOriginal() {
+        this.maskContainer.classList.add('hidden');
+        this.layerContainer.classList.add('hidden');
+        this.previewContainer.classList.add('hidden');
+        this.backToEditContainer.classList.add('hidden');
+        this.originalEditTool.classList.remove('hidden');
+        this.showToast('已返回原图编辑模式');
+      }
+
+      backToSimplified() {
+        this.maskContainer.classList.add('hidden');
+        this.layerContainer.classList.add('hidden');
+        this.previewContainer.classList.add('hidden');
+        this.backToEditContainer.classList.add('hidden');
+        this.simplifiedEditTool.classList.remove('hidden');
+        this.showToast('已返回简化图编辑模式');
+      }
+
+      processPCB() {
+        const w = this.simplifiedCanvas.width, h = this.simplifiedCanvas.height;
+        const ctx = this.simplifiedCanvas.getContext('2d');
+        const data = ctx.getImageData(0, 0, w, h);
+        this.maskList = [];
+
+        const buffers = {};
+        for (const [name, rgb] of Object.entries(this.currentColorScheme)) {
+          buffers[name] = new Uint8ClampedArray(w * h * 4);
+        }
+
+        for (let i = 0; i < data.data.length; i += 4) {
+          const pixel = [data.data[i], data.data[i+1], data.data[i+2]];
+          for (const [name, color] of Object.entries(this.currentColorScheme)) {
+            if (pixel[0] === color[0] && pixel[1] === color[1] && pixel[2] === color[2]) {
+              buffers[name].set([...color, 255], i);
+              break;
+            }
+          }
+        }
+
+        this.masksContainer.innerHTML = '';
+        for (const [name, buffer] of Object.entries(buffers)) {
+          const canvas = document.createElement('canvas');
+          canvas.width = w;
+          canvas.height = h;
+          const ctx = canvas.getContext('2d');
+          ctx.putImageData(new ImageData(buffer, w, h), 0, 0);
+                  
+          // 添加定位标记
+          this.addCornerMarkers(ctx, w, h);
+                  
+          const img = document.createElement('img');
+          img.src = canvas.toDataURL();
+          img.className = "w-24 h-24 rounded border hover:shadow cursor-pointer";
+          img.title = name;
+          img.onclick = () => this.downloadImage(img.src, `${name}_mask.png`);
+          this.masksContainer.appendChild(img);
+          this.maskList.push({ name, canvas, dataURL: img.src });
+        }
+
+        this.generateLayers();
+        this.generatePreview();
+        this.showToast('处理完成');
+      }
+
+      addCornerMarkers(ctx, width, height) {
+        const markerColor = 'red';
+        const markerSize = 1;
+        ctx.fillStyle = markerColor;
+        ctx.fillRect(0, 0, markerSize, markerSize); // 左上
+        ctx.fillRect(width - markerSize, 0, markerSize, markerSize); // 右上
+        ctx.fillRect(0, height - markerSize, markerSize, markerSize); // 左下
+        ctx.fillRect(width - markerSize, height - markerSize, markerSize, markerSize); // 右下
+      }
+
+      generateLayers() {
+        const w = this.simplifiedCanvas.width, h = this.simplifiedCanvas.height;
+        this.layersContainer.innerHTML = '';
+
+        const combine = (names) => {
+          const canvas = document.createElement('canvas');
+          canvas.width = w;
+          canvas.height = h;
+          const ctx = canvas.getContext('2d');
+          names.forEach(n => {
+            const m = this.maskList.find(m => m.name === n);
+            if (m) ctx.drawImage(m.canvas, 0, 0);
+          });
+          return canvas;
+        };
+
+        const layers = {
+          '正面阻焊层': combine(['深绿', '浅绿', '黑色']),
+          '正面铜皮层': combine(['浅蓝', '黑色']),
+          '背面阻焊层': combine(['浅绿'])
+        };
+
+        // 根据选择的色系调整图层名称
+        if (this.currentColorScheme === COLOR_SCHEMES.red) {
+          layers['正面铜皮层'] = combine(['浅红', '黑色']);
+        } else if (this.currentColorScheme === COLOR_SCHEMES.purple) {
+          layers['正面铜皮层'] = combine(['浅紫', '黑色']);
+        }
+
+        for (const [layerName, canvas] of Object.entries(layers)) {
+          const img = document.createElement('img');
+          img.src = canvas.toDataURL();
+          img.className = "w-24 h-24 rounded border hover:shadow cursor-pointer";
+          img.title = layerName;
+          img.onclick = () => this.downloadImage(img.src, `${layerName}.png`);
+          this.layersContainer.appendChild(img);
+          this.maskList.push({ name: layerName, canvas, dataURL: img.src });
+        }
+      }
+
+      generatePreview() {
+        const w = this.simplifiedCanvas.width, h = this.simplifiedCanvas.height;
+        const ctx = this.simplifiedCanvas.getContext('2d');
+        const data = ctx.getImageData(0, 0, w, h);
+        const previewCanvas = document.getElementById('previewCanvas');
+        previewCanvas.width = w;
+        previewCanvas.height = h;
+        const previewCtx = previewCanvas.getContext('2d');
+        const previewData = previewCtx.createImageData(w, h);
+
+        for (let i = 0; i < data.data.length; i += 4) {
+          // 如果是黑色像素(6,16,8)，则替换为银色(#a0a0a0)
+          if (data.data[i] === 6 && data.data[i+1] === 16 && data.data[i+2] === 8) {
+            previewData.data[i] = 160;     // R
+            previewData.data[i+1] = 160;   // G
+            previewData.data[i+2] = 160;   // B
+            previewData.data[i+3] = 255;   // A
+          } else {
+            previewData.data.set(data.data.slice(i, i+4), i);
+          }
+        }
+
+        previewCtx.putImageData(previewData, 0, 0);
+
+        const previewImg = document.createElement('img');
+        previewImg.src = previewCanvas.toDataURL();
+        previewImg.className = "w-24 h-24 rounded border hover:shadow cursor-pointer";
+        previewImg.title = "实物预览图";
+        previewImg.onclick = () => this.downloadImage(previewImg.src, '实物预览图.png');
+        document.getElementById('preview').appendChild(previewImg);
+        this.maskList.push({ name: '实物预览图', canvas: previewCanvas, dataURL: previewImg.src });
+      }
+
+      downloadImage(url, filename) {
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = filename;
+        a.click();
+      }
+
+      downloadAllAsZip() {
+        const customFilename = document.getElementById('customFilename').value.trim() || 'pcb灯光画';
+        this.showToast('正在打包下载...');
+                
+        const zip = new JSZip();
+        this.maskList.forEach(({ name, dataURL }) => {
+          const rename = RENAME_MAP[name] || name;
+          const base64 = dataURL.split(',')[1];
+          zip.file(`${rename}.png`, base64, { base64: true });
+        });
+
+        zip.generateAsync({ type: "blob" }).then((blob) => {
+          saveAs(blob, `${customFilename}.zip`);
+          setTimeout(() => this.showToast('下载完成！'), 1000);
+        });
+      }
+    }
+
+    // 初始化应用
+    document.addEventListener('DOMContentLoaded', () => {
+      new PCBImageProcessor();
+    });
+  </script>
+</body>
+</html>
